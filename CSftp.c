@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #define BUFFSIZE 1024
 
 // Here is an example of how to use the above function. It also shows
@@ -27,9 +28,7 @@ int main(int argc, char **argv) {
     // This is the main program for the thread version of nc
 
     int i;
-    pthread_t child;
-    pthread_create(&child, NULL, inc_x, NULL);
-    int sockfd, newsockfd, portno;
+    int sockfd, newsockfd, portno, clientresponse;
     socklen_t clilen;
     struct sockaddr_in serv_addr, cli_addr;
     char recv_buf[BUFFSIZE];
@@ -60,7 +59,7 @@ int main(int argc, char **argv) {
 
     bzero((char *)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
+    serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     serv_addr.sin_port = htons(port);
     printf("%d", port);
     
@@ -72,8 +71,6 @@ int main(int argc, char **argv) {
     // listen for incoming connections
     listen(sockfd, 1);
     clilen = sizeof(cli_addr);
-
-    // accept incoming connections
     
     // accept incoming connection
     newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
@@ -90,9 +87,13 @@ int main(int argc, char **argv) {
     printf("Received message from client: %s\n", recv_buf);
 
     // send a response to the client
-    n = send(newsockfd, "Hello, client!", 15, 0);
+    n = send(newsockfd, "220", 15, 0);
     if (n < 0)
         perror("ERROR writing to socket");
+  
+    int buffer[BUFFSIZE];
+    
+
 
     close(newsockfd);
     close(sockfd);

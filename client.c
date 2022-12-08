@@ -1,6 +1,6 @@
-#include "helper.h"
+#include "definitions.h"
 #include "server.h"
-#include "handles.h"
+#include "client.h"
 #include "parsecmd.h"
 #include "dir.h"
 #include <strings.h>
@@ -16,9 +16,9 @@
 #include <stdio.h>
 
 /**
- * Handles client request and generates response message for client
- * @param Command: Current cmd from client
- * @param State: Current connection state from client
+ * handle client request and gen response
+ * Cmd: Current cmd from client
+ * State: Connection state from client
  */
 
 void response(Command* cmd, State* state)
@@ -236,6 +236,7 @@ void ftpCdup(State* state)
 
 void ftpNlst(Command* cmd, State* state)
 {
+    printf("This is NLST arg: %d \n", cmd->arg);
     char curDir[BUFFER_SIZE];
     memset(curDir, 0, BUFFER_SIZE);
 
@@ -278,9 +279,9 @@ void ftpNlst(Command* cmd, State* state)
     }
 }
 
+
 void ftpMode(Command* cmd, State* state)
 {
-    printf("Server info: MODE command\n");
     if (state->logged_in) {
         if (strcasecmp(cmd->arg, "S") == 0) {
             state->message = "200: Mode is S. Valid.\n";
@@ -307,8 +308,6 @@ void ftpPasv(Command* cmd, State* state)
     int ip[4] = { 0 }; // ipv4 address
     char message_buf[256] = { 0 };
     Port* port = malloc(sizeof(Port));
-
-    printf("Server info: PASV command\n");
 
     if (state->logged_in) {
         char* response = "227: Passive Mode (%d,%d,%d,%d,%d,%d)\n";
@@ -360,6 +359,7 @@ void ftpType(Command* cmd, State* state)
     writeState(state);
 }
 
+
 void ftpRetr(Command* cmd, State* state)
 {
     if (!state->logged_in) {
@@ -369,52 +369,42 @@ void ftpRetr(Command* cmd, State* state)
     }
 
     if (state->mode != SERVER) {
-        state->message = "425: Use pasv to open data connection.\n";
+        state->message = "425: Use PASV to open data connection first.\n";
         writeState(state);
         return;
     }
 
-    int response = validateFilePath
-(cmd->arg);
-    if (response < 0) {
-        state->message = "550: File path not reachable.\n";
+    int res = validateFilePath(cmd->arg);
+    if (res < 0) {
+        state->message = "550: File path not reachable. \n";
         writeState(state);
         return;
     }
 
-    int connection;
-    int fd; // file descriptor from opening the file
+    int fd = open(cmd->arg, O_RDONLY);
+    if (access(cmd->arg, R_OK) != 0 || fd == -1) {
+        state->message = "550: Failed to get file.\n";
+        writeState(state);
+        return;
+    }
+
     struct stat stat_buf;
-    int sent_total = 0;
+    fstat(fd, &stat_buf);
+    state->message = "150: File valid. Opening binary mode connection.\n";
+    writeState(state);
+
     off_t offset = 0;
-    fd = open(cmd->arg, O_RDONLY);
-    // Is file readable and open the file for read-only
-    if (access(cmd->arg, R_OK) == 0 && fd != -1) {
-        fstat(fd, &stat_buf); // get file stats
-        state->message = "150: File status bad. Open binary mode.\n";
-        writeState(state);
-
-        connection = acceptConnection(state->sock_pasv);
-        if (sent_total = sendfile(connection, fd, &offset, stat_buf.st_size)) {
-
-            if (sent_total != stat_buf.st_size) {
-                perror("Not done transfer.");
-                exit(EXIT_SUCCESS);
-            }
-
-            state->message = "226: Good file send closing connection. \n";
-        }
-        else {
-            state->message = "550: Can't read file.\n";
-        }
-        close(fd);
-        close(connection);
+    int connection = acceptConnection(state->sock_pasv);
+    int sent_total = sendfile(connection, fd, &offset, stat_buf.st_size);
+    if (sent_total != stat_buf.st_size) {
+        perror("Not full transfer");
+        exit(EXIT_SUCCESS);
     }
-    else {
-        state->message = "550: Can't get file. \n";
-    }
+
+    state->message = "226: Good file send. Closing connection.\n";
+    writeState(state);
+    close(fd);
+    close(connection);
     close(state->sock_pasv);
     state->mode = NORMAL;
-
-    writeState(state);
 }

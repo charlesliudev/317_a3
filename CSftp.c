@@ -3,101 +3,139 @@
 #include <stdio.h>
 #include "dir.h"
 #include "usage.h"
-#include <pthread.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <netinet/in.h>
+#include <sys/wait.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <strings.h>
+#include "definitions.h"
+#include "server.h"
+#include "client.h"
+#include <netdb.h>
+#include <limits.h>
 #include <arpa/inet.h>
-#define BUFFSIZE 1024
+#include "parsecmd.h"
 
-// Here is an example of how to use the above function. It also shows
-// one how to get the arguments passed on the command line.
-/* this function is run by the second thread */
 
-void *inc_x()
-{
-  printf("x increment finished\n");
-  return NULL;
+void handleClient(int connection) {
+  int ip[4]; // ipv4 address
+  char clientIP[256];
+  getIP(connection, ip);
+  sprintf(clientIP, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+  printf("Client accepted connection from: %s\n", clientIP);
+
+  // Initialize client state and command
+  memset(ip, 0, 4);
+  memset(clientIP, 0, 256);
+  char buffer[BUFFER_SIZE];
+  memset(buffer, 0, BUFFER_SIZE);
+  Command *cmd = malloc(sizeof(Command));
+  State *state = malloc(sizeof(State));
+  state->connection = connection;
+
+  printf("Created a child process for the new incoming request\n");
+  char initWelcome[BUFFER_SIZE] = "220"; // initialize connection with 220 code
+  strcat(initWelcome, " - ");
+  strcat(initWelcome, welcome_message);
+  strcat(initWelcome, "\n");
+  write(connection, initWelcome, strlen(initWelcome));
+  memset(initWelcome, 0, BUFFER_SIZE);
+
+  // Read command from client and handle it
+  while (read(connection, buffer, BUFFER_SIZE)) {
+    signal(SIGCHLD, handleZombie);
+
+      buffer[BUFFER_SIZE - 1] = '\0';
+      printf("User %s sent command: %s\n", (state->username == 0) ? "unknown" : state->username, buffer);
+      state->logged_in = state->logged_in == 1? 1: 0;
+
+      int res = parseCommand(buffer, cmd);
+      if (res == -1) {
+        printf("Unable to parse\n");
+        // If unable to parse command
+        state->message = "500: Unknown Command\n";
+        writeState(state);
+      } else {
+        response(cmd, state);
+      }
+
+    // Free command args
+    printf("Freeing command args\n");
+    memset(cmd->command, 0, 5);
+    memset(cmd->command, 0, BUFFER_SIZE);
+    memset(buffer, 0, BUFFER_SIZE);
+  }
+  // printf("Server info: Client disconnected.\n");
+  // exit(0);
 }
 
-int main(int argc, char **argv) {
+void initServer(int port) {
+  int sock = createSocket(port);
+  struct sockaddr_in client_address;
+  int len = sizeof(client_address);
+  int connection;
 
-    // This is some sample code feel free to delete it
-    // This is the main program for the thread version of nc
+  while (1)
+  {
+    connection = accept(sock, (struct sockaddr *)&client_address, &len);
 
-    int i;
-    int sockfd, newsockfd, portno, clientresponse;
-    socklen_t clilen;
-    struct sockaddr_in serv_addr, cli_addr;
-    char recv_buf[BUFFSIZE];
-
-
-    
-    // Check the command line arguments
-    if (argc != 2) {
-      usage(argv[0]);
-      return -1;
+    int pid = fork();
+    if (pid < 0) {
+      fprintf(stderr, "Cannot create child");
+      exit(EXIT_SUCCESS);
     }
-    int port = atoi(argv[1]);
-    printf("%d", port);
 
-
-    sockfd = socket(AF_INET, SOCK_STREAM,0);
-    if (sockfd == -1){
-      printf("socket creation failed...\n");
+    if (!pid) {
+      // Child process handles the client requests
+      handleClient(connection);
       exit(0);
-
-
+    } else {
+      // Parent process can close the accepted connection
+      printf("Parent process closing connection.\n");
+      close(connection);
     }
-    else
-    printf("socket created..\n");
-    printf("%d", port);
+  }
+}
+
+/**
+ * Writes to the socket (state->connection), with the message state->message
+ * @param State struct
+ */
+void writeState(State *state)
+{
+  write(state->connection, state->message, strlen(state->message));
+  state->message = '\0'; 
+}
+//-------------------------------------------------------------------------------------------//
 
 
+int main(int argc, char *argv[])
+{
 
-    bzero((char *)&serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    serv_addr.sin_port = htons(port);
-    printf("%d", port);
-    
-    // bind socket to port
-    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0){
-        perror("ERROR on binding");
+  int port;
+  // This is some sample code feel free to delete it
+  // This is the main program for the thread version of nc
+
+  // Check the command line arguments
+  if (argc != 2)
+  {
+    usage(argv[0]);
+    return -1;
+  }
+    if (getcwd(start_dir, sizeof(start_dir)) != NULL) {
+        printf("Init working dir: %s\n", start_dir);
     }
+  port = atoi(argv[1]);
+  if (port < 1024 || port > 65535)
+  {
+    // port has to be in range
+    usage(argv[0]);
+    return -1;
+  }
 
-    // listen for incoming connections
-    listen(sockfd, 1);
-    clilen = sizeof(cli_addr);
-    
-    // accept incoming connection
-    newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-    if (newsockfd < 0)
-        perror("ERROR on accept");
+  // Initialize the server
+  initServer(port);
 
-    // receive data from the client
-    bzero(recv_buf, BUFFSIZE);
-    int n = recv(newsockfd, recv_buf, BUFFSIZE - 1, 0);
-    if (n < 0)
-        perror("ERROR reading from socket");
-
-    // process the received data
-    printf("Received message from client: %s\n", recv_buf);
-
-    // send a response to the client
-    n = send(newsockfd, "220", 15, 0);
-    if (n < 0)
-        perror("ERROR writing to socket");
-  
-    int buffer[BUFFSIZE];
-    
-
-
-    close(newsockfd);
-    close(sockfd);
-
-    return 0;
-
+  return 0;
 }
